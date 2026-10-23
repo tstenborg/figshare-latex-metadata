@@ -1,0 +1,330 @@
+\ProvidesPackage{figshare-meta}[2026/10/17 v1.0.0 Figshare metadata loader]
+
+% This style file helps users parse and typeset Figshare metadata in LaTeX.
+% Figshare metadata fields sometimes contain inline HTML tags.
+% The style strives to display any inline HTML tags in LaTeX, as they appear in the metadata.
+
+% General package inclusions.
+\RequirePackage{array}  % For advanced table column alignment options.
+\RequirePackage{booktabs}  % For table top, mid and bottom rules.
+\RequirePackage{expl3}  % For the LaTeX3 programming language expl3.
+\RequirePackage{iftex}  % For dynamic LaTeX engine support.
+\RequirePackage{jsonparse}  % For JSON parsing.
+\RequirePackage{longtable}  % For multi-page tables.
+\RequirePackage[table]{xcolor}  % For alternating table row colours.
+\RequirePackage{xparse}  % To allow use of '*' to pass true or false values.
+
+% Use 'babel' for robust language support.
+% N.B. Assume particular language support is inherited from the \documentclass call of '.tex' file using this style file.
+% E.g., for English language support, use '\documentclass[english]{article}' in the '.tex' file using this style file.
+\RequirePackage{babel}
+
+% Include hyperref to enable building hyperlinks.
+% Important: load after babel and longtable.
+\RequirePackage[hidelinks]{hyperref}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Character rendering support.
+\ifPDFTeX
+  % Configuration for pdfLaTeX.
+  \RequirePackage{amssymb}  % For rendering selected Unicode mathematical symbols.
+  \RequirePackage[utf8]{inputenc}  % For input encoding. IMPORTANT: include before 'fontenc'.
+  \RequirePackage[T1]{fontenc}  % For font encoding. IMPORTANT: include after 'inputenc'.
+
+  % Remap literal curly quotes to LaTeX-native commands.
+  \DeclareUnicodeCharacter{201C}{``}  % Handle opening smart quotes (“).
+  \DeclareUnicodeCharacter{201D}{''}  % Handle closing smart quotes (”).
+
+  % Remap common mathematical and related characters, whilst preserving good spacing.
+  % N.B. Every remapping defined has been explicitly tested with pdfLaTeX.
+
+  % Helper macro: Use raw symbols in math mode, wrap safely in text mode.
+  \newcommand{\FigshareMetaSmartMathChar}[1]{%
+    \relax\ifmmode#1\else$#1$\fi%
+  }
+
+  % Remap selected, common mathematical characters.
+  \DeclareUnicodeCharacter{00B1}{\FigshareMetaSmartMathChar{\pm}}  % ±.
+  \DeclareUnicodeCharacter{00D7}{\FigshareMetaSmartMathChar{\times}}  % ×.
+  \DeclareUnicodeCharacter{00F7}{\FigshareMetaSmartMathChar{\div}}  % ÷.
+  \DeclareUnicodeCharacter{2032}{\FigshareMetaSmartMathChar{'}}  % ′ (Single Prime).
+  \DeclareUnicodeCharacter{2033}{\FigshareMetaSmartMathChar{''}}  % ″ (Double Prime / Seconds / Inches).
+  \DeclareUnicodeCharacter{2034}{\FigshareMetaSmartMathChar{'''}}  % ‴ (Triple Prime).
+  \DeclareUnicodeCharacter{2212}{\FigshareMetaSmartMathChar{-}}  % − (a true minus sign, not a hyphen).
+  \DeclareUnicodeCharacter{2215}{\FigshareMetaSmartMathChar{/}}  % ∕ (Division slash).
+  \DeclareUnicodeCharacter{2260}{\FigshareMetaSmartMathChar{\neq}}  % ≠.
+  \DeclareUnicodeCharacter{2264}{\FigshareMetaSmartMathChar{\leq}}  % ≤.
+  \DeclareUnicodeCharacter{2265}{\FigshareMetaSmartMathChar{\geq}}  % ≥.
+
+  % Other mathematics-related or mathematics-adjacent remappings.
+  \DeclareUnicodeCharacter{00B0}{\TextOrMath{\textdegree}{^\circ}}% ° (degrees sign).
+\else
+  % Configuration for engines with modern Unicode support, e.g., XeLaTeX, LuaLaTeX.
+  \RequirePackage{fontspec}
+\fi
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Enable expl3 syntax mode.
+\ExplSyntaxOn
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Define custom commands that enable improved line breaking around inline HTML tags.
+%
+% Allow replacement of '<' and '>' with versions that include an explicit break point.
+\catcode`\<=12
+\catcode`\>=12
+\let\html@orig@less=<
+\let\html@orig@greater=>
+
+% Define '\FigshareMetaBeginHtmlBreaks' as a custom command to activate improved line breaking around inline HTML tags.
+\begingroup
+  \catcode`\<=\active
+  \catcode`\>=\active
+  \gdef\FigshareMetaBeginHtmlBreaks{%
+    \begingroup
+    \catcode`\<=\active%
+    \catcode`\>=\active%
+    \def<{\html@orig@less\allowbreak}%
+    \def>{\html@orig@greater\allowbreak}%
+  }
+\endgroup
+
+% Define '\FigshareMetaEndHtmlBreaks' as a custom command to deactivate improved line breaking around inline HTML tags.
+\newcommand{\FigshareMetaEndHtmlBreaks}{\endgroup}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Define variables.
+\seq_new:N \l_figshare_meta_value_seq  % Sequence variable.
+\tl_new:N \l_figshare_meta_value_tl  % Temporary scratch variable.
+\bool_new:N \l_figshare_meta_value_bool  % Boolean variable.
+
+% Configure JSON parse settings.
+% a) Create an alias for the LaTeX new paragraph command '\par'.
+% b) Apply the paragraph alias to simulate linefeed characters in LaTeX.
+% N.B. The linefeed character is common to macOS (modern), Linux, Unix and Windows line endings.
+\let\FigsharePar\par
+\JSONParseSet{escape={all}, replace/linefeed={\FigsharePar}}
+
+% Load a JSON file.
+\NewDocumentCommand{\FigshareMetaLoadJSON}{m}
+  {
+    \file_if_exist:nTF {#1}
+      { \JSONParseFromFile{\FigshareMetaJSON}{#1} }
+      {
+        \PackageError{figshare-meta}
+          {JSON file `#1' not found.}
+          {Check the filename and path, then try again.}
+        \cs_gset:Npn \FigshareMetaJSON { }
+      }
+  }
+
+% Parse single-value JSON keys.
+% E.g., "id": 573598.
+%
+% Define a single-value JSON getter function.
+% Use "\__" syntax to define it as a private function.
+\cs_new:Nn \__figshare_meta_get_single_value:n { \JSONParseValue{\FigshareMetaJSON}{#1} }
+%
+% If a key-value pair is missing from the JSON file, empty content is returned.
+\newcommand{\FigshareMetaGetID}%
+  { \__figshare_meta_get_single_value:n {id} }
+\newcommand{\FigshareMetaGetItemType}%
+  { \__figshare_meta_get_single_value:n {defined_type_name} }
+\newcommand{\FigshareMetaGetTitle}%
+  { \__figshare_meta_get_single_value:n {title} }
+%
+% Description metadata is displayed literally. Embedded HTML tags are preserved
+% as metadata and not interpreted as HTML.
+\newcommand{\FigshareMetaGetDescription}%
+  { \__figshare_meta_get_single_value:n {description} }
+
+
+% Parse single-value JSON keys, with optional hyperlinks.
+%
+% Define a new combined getter and hyperlinker function.
+\cs_new:Npn \__figshare_meta_get_hyperlinked_single_value:nnn #1#2#3 {
+  % Argument #1 is a Boolean specifying if the function was called with a '*'.
+  % Argument #2 is the key to parse.
+  % Argument #3 is a hyperlink prefix.
+
+  \tl_set:Nx \l_figshare_meta_value_tl
+    { \JSONParseExpandableValue{\FigshareMetaJSON}{#2} }
+
+  \tl_if_empty:NTF \l_figshare_meta_value_tl
+    { }
+    {
+      \IfBooleanTF{#1}
+        {
+          \href
+            { #3\tl_use:N \l_figshare_meta_value_tl }
+            { \tl_use:N \l_figshare_meta_value_tl }
+        }
+        { \tl_use:N \l_figshare_meta_value_tl }
+    }
+}
+%
+\NewDocumentCommand{\FigshareMetaGetDOI}{s}%
+  { \__figshare_meta_get_hyperlinked_single_value:nnn {#1}{doi}{https://doi.org/} }
+
+
+% Parse multi-value JSON keys.
+% E.g., "keywords": ["parasite-infected", "non-infected", "cholera"].
+%
+% Define a multi-value JSON getter function.
+\cs_new:Nn \__figshare_meta_get_multi_value:n {
+  % Clear a sequence variable.
+  \seq_clear:N \l_figshare_meta_value_seq
+
+  % Iterate over each value in key #1.
+  \JSONParseArrayMapInline {\FigshareMetaJSON} {#1}%
+    {
+      % Append values to the sequence.
+      \seq_put_right:Nx \l_figshare_meta_value_seq
+        { \JSONParseExpandableValue {\FigshareMetaJSON} { #1 [ ##1 ] } }%
+    }%
+
+  % Join sequence values with commas.
+  \seq_use:Nn \l_figshare_meta_value_seq {,~}%
+}
+%
+\newcommand{\FigshareMetaGetKeywords}%
+  {  \__figshare_meta_get_multi_value:n {keywords} }
+\newcommand{\FigshareMetaGetTags}%
+  { \__figshare_meta_get_multi_value:n {tags} }
+
+
+% Parse nested-single-value JSON keys.
+% E.g., license.name in "license": {"name": "CC BY 4.0", "url": "https://creativecommons.org/licenses/by/4.0/"}
+%
+% Define a new nested-single-value getter function.
+\cs_new:Nn \__figshare_meta_get_nested_single_value:nn { \JSONParseExpandableValue{\FigshareMetaJSON}{#1.#2} }
+%
+\newcommand{\FigshareMetaGetLicense}%
+  { \__figshare_meta_get_nested_single_value:nn {license}{name} }
+
+
+% Parse multi-nested-single-value JSON keys.
+% E.g., authors.full_name in "authors": [{"id": 89164, "full_name": "Jason B. Harris"}, {"id": 373628, "full_name": "Michael J. Podolsky"}]
+%
+% Define a new multi-nested-single-value getter function.
+\cs_new:Nn \__figshare_meta_get_multi_nested_single_value:nn {
+  % Parse the value of key #2 nested in key #1. Return empty content for missing data.
+
+  \seq_clear:N \l_figshare_meta_value_seq%
+
+  % Iterate over each key-value pair set nested in key #1.
+  \JSONParseArrayMapInline{\FigshareMetaJSON}{#1}{%
+    % If the nested value in that set is not empty, append it to the sequence.
+    \tl_if_empty:eF {\JSONParseExpandableValue{\FigshareMetaJSON}{#1[##1].#2}} {%
+        \seq_put_right:Nx \l_figshare_meta_value_seq
+          { \JSONParseExpandableValue{\FigshareMetaJSON}{#1[##1].#2} } }%
+  }%
+
+  % Join sequence values with commas.
+  \seq_use:Nn \l_figshare_meta_value_seq {,~}%
+}
+%
+\newcommand{\FigshareMetaGetAuthorsFirstName}%
+  { \__figshare_meta_get_multi_nested_single_value:nn {authors}{first_name} }
+\newcommand{\FigshareMetaGetAuthorsFullName}%
+  { \__figshare_meta_get_multi_nested_single_value:nn {authors}{full_name} }
+\newcommand{\FigshareMetaGetAuthorsLastName}%
+  { \__figshare_meta_get_multi_nested_single_value:nn {authors}{last_name} }
+\newcommand{\FigshareMetaGetAuthorsORCID}%
+  { \__figshare_meta_get_multi_nested_single_value:nn {authors}{orcid_id} }
+\newcommand{\FigshareMetaGetCategories}%
+  { \__figshare_meta_get_multi_nested_single_value:nn {categories}{title} }
+
+
+% Figshare metadata holds files sizes in raw bytes.
+% Convert large values to KiB, MiB, GiB, TiB, PiB or EiB.
+% Use binary scaling; 1024 bytes = 1 KiB, 1024 KiB = 1 MiB, etc.
+% N.B. Detailed file sizes are only given for files less than 1 ZiB.
+%
+% Scale values and round them to one decimal place.
+% Use "\__" syntax to define it as a private function.
+\cs_new:Nn \__figshare_meta_scale_bytes:nn { \fp_eval:n { round(#1 / #2, 1) } }
+%
+% Constants for file size handling.
+% Use "\c__" syntax to define private constants.
+% Note, int is a signed 32-bit integer, so use floating-point numbers for very large values.
+\int_const:Nn \c__figshare_meta_step_kilobytes_int { 1024 }
+\int_const:Nn \c__figshare_meta_step_megabytes_int { 1048576 }  % 1,024 * 1,024 = 1,048,576
+\int_const:Nn \c__figshare_meta_step_gigabytes_int { 1073741824 }  % 1,024 * 1,048,576 = 1,073,741,824
+\fp_const:Nn \c__figshare_meta_step_terabytes_fp { 1099511627776 }  % 1,024 * 1,073,741,824 = 1,099,511,627,776
+\fp_const:Nn \c__figshare_meta_step_petabytes_fp { 1125899906842624 }  % 1,024 * 1,099,511,627,776 = 1,125,899,906,842,624
+\fp_const:Nn \c__figshare_meta_step_exabytes_fp { 1152921504606846976 }  % 1,024 * 1,125,899,906,842,624 = 1,152,921,504,606,846,976
+\fp_const:Nn \c__figshare_meta_step_zettabytes_fp { 1180591620717411303424 }  % 1,024 * 1,152,921,504,606,846,976 = 1,180,591,620,717,411,303,424
+%
+% Define `\FigshareMetaFormatBytes' as a new command with one mandatory argument.
+\NewDocumentCommand{\FigshareMetaFormatBytes}{m}{%
+  \bool_case:nTF
+    {
+      { \fp_compare_p:n { #1 < 0 } } { \( < 0 \)~B }
+      { \fp_compare_p:n { #1 < \c__figshare_meta_step_kilobytes_int } } { #1~B }
+      { \fp_compare_p:n { #1 < \c__figshare_meta_step_megabytes_int } } { \__figshare_meta_scale_bytes:nn {#1}{1024}~KiB }
+      { \fp_compare_p:n { #1 < \c__figshare_meta_step_gigabytes_int } } { \__figshare_meta_scale_bytes:nn {#1}{\c__figshare_meta_step_megabytes_int}~MiB }
+      { \fp_compare_p:n { #1 < \c__figshare_meta_step_terabytes_fp } }  { \__figshare_meta_scale_bytes:nn {#1}{\c__figshare_meta_step_gigabytes_int}~GiB }
+      { \fp_compare_p:n { #1 < \c__figshare_meta_step_petabytes_fp } }  { \__figshare_meta_scale_bytes:nn {#1}{\c__figshare_meta_step_terabytes_fp}~TiB }
+      { \fp_compare_p:n { #1 < \c__figshare_meta_step_exabytes_fp } }   { \__figshare_meta_scale_bytes:nn {#1}{\c__figshare_meta_step_petabytes_fp}~PiB }
+      { \fp_compare_p:n { #1 < \c__figshare_meta_step_zettabytes_fp } } { \__figshare_meta_scale_bytes:nn {#1}{\c__figshare_meta_step_exabytes_fp}~EiB }
+      { \fp_compare_p:n { #1 >= \c__figshare_meta_step_zettabytes_fp } } { \ensuremath{\geq}~1~ZiB }
+    }
+    {}  % Output if one true branch executes successfully.
+    { -- }  % Fallback display value.
+}
+
+% Files: parse the 'name' and 'size' values nested in the 'files' key.
+% Present the values in a table, with alternating row colours
+% Multi-page tables are supported.
+% N.B. Much of the processing in this style file returns empty content if
+%      empty of missing JSON values are encountered. In contrast, if a table is
+%      generated, any missing cell values are rendered with an en dash for
+%      clarity and aesthetic reasons.
+\newcommand{\FigshareMetaTabulateFiles}%
+  {%
+    % Only build a table if the 'files' key exists and its value is not empty.
+    \bool_set_false:N \l_figshare_meta_value_bool%
+    \JSONParseArrayMapInline{\FigshareMetaJSON}{files}{%
+      % This Boolean write never runs if 'files' is empty.
+      \bool_set_true:N \l_figshare_meta_value_bool%
+    }%
+
+    \bool_if:NT \l_figshare_meta_value_bool {%
+      {% Keep the row colouring local to this table.
+        \rowcolors{3}{white}{gray!15}%
+        \begin{longtable}{%
+          @{}%
+          >{\raggedleft\arraybackslash}p{\dimexpr 0.20\linewidth-\tabcolsep\relax}%
+          @{\hspace{2\tabcolsep}}%
+          >{\raggedright\arraybackslash}p{\dimexpr 0.80\linewidth-\tabcolsep\relax}%
+          @{}%
+        }
+        \caption{Figshare\ files.}\\%
+        \toprule%
+        \textbf{Size}&\textbf{Name}\\%
+        \midrule%
+        \endfirsthead%
+        \caption[]{Figshare\ files\ (continued).}\\%
+        \toprule%
+        \textbf{Size}&\textbf{Name}\\%
+        \midrule%
+        \endhead%
+        \JSONParseArrayMapInline{\FigshareMetaJSON}{files}{%
+          % N.B. Don't cache the parsing operations here.
+          %      The order of internal LaTeX table construction operations is complex.
+          \tl_if_empty:eTF { \JSONParseExpandableValue{\FigshareMetaJSON}{files[##1].size} }
+            { -- }% Print an en dash if the 'size' value is missing.
+            { \FigshareMetaFormatBytes{ \JSONParseExpandableValue{\FigshareMetaJSON}{files[##1].size} } }&%
+          \tl_if_empty:eTF { \JSONParseExpandableValue{\FigshareMetaJSON}{files[##1].name} }
+            { -- }% Print an en dash if the 'name' value is missing.
+            { \JSONParseExpandableValue{\FigshareMetaJSON}{files[##1].name} }\\%
+        }%
+        \bottomrule%
+        \end{longtable}%
+      }%
+    }%
+  }
+
+% Disable expl3 syntax mode.
+\ExplSyntaxOff

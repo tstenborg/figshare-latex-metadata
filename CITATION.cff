@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+title: "Retrieving and Typesetting Figshare Metadata for LaTeX"
+message: "If you use this repository, please cite it using these metadata."
+type: software
+authors:
+  - given-names: Travis
+    family-names: Stenborg
+    orcid: "https://orcid.org/0000-0002-2693-9628"
+url: "https://github.com/tstenborg/figshare-latex-metadata"
+abstract: >-
+  "This repository holds digital resources associated with the article \
+  'Retrieving and typesetting Figshare metadata for LaTeX'. Figshare is an \
+  online research data sharing platform. The article discusses new resources \
+  for working with Figshare metadata and LaTeX. A Python fetch script \
+  automates metadata downloads. A LaTeX style file then provides an API for \
+  parsing and typesetting the metadata."
+keywords:
+  - expl3
+  - figshare
+  - latex
+license: "BSD-3-Clause"
+preferred-citation:
+  authors:
+    - given-names: Travis
+      family-names: Stenborg
+  doi: ""
+  end: 0 # Last page number.
+  issue: 3
+  journal: TUGboat
+  start: 0 # First page number.
+  title: "Retrieving and typesetting Figshare metadata for LaTeX"
+  type: article
+  volume: 47
+  year: 2026

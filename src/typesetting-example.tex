@@ -1,0 +1,36 @@
+% This document demonstrates use of the LaTeX ``figshare-meta'' style.
+% The style helps parse and typeset Figshare metadata.
+%
+% Passing a language parameter to the ``article'' document class is recommended.
+% The language parameter will be inherited by the ``babel'' package used in ``figshare-meta''.
+% Passing a language parameter typically improves typesetting elements such as line breaking.
+% Here, typesetting is being enhanced for ``english'' content.
+\documentclass[english]{article}
+\usepackage{figshare-meta}   % For metadata extraction from Figshare.
+\usepackage{parskip}   % For keeping a blank line between paragraphs with the `article' class.
+
+\begin{document}
+
+% Import and parse a target Figshare metadata file.
+% JSON-formatted metadata is assumed.
+% To typeset metadata for a different Figshare item, modify the file name, below, accordingly.
+\FigshareMetaLoadJSON{../data/figshare-metadata-example.json}
+
+\section*{\FigshareMetaGetTitle}
+
+\textbf{Authors:} \FigshareMetaGetAuthorsFullName%
+
+\FigshareMetaBeginHtmlBreaks%
+\textbf{Description:} \FigshareMetaGetDescription%
+\FigshareMetaEndHtmlBreaks%
+\par
+
+\textbf{Categories:} \FigshareMetaGetCategories%
+
+\textbf{DOI:} \FigshareMetaGetDOI*%
+
+\textbf{Figshare ID:} \FigshareMetaGetID%
+
+\FigshareMetaTabulateFiles%
+
+\end{document}
