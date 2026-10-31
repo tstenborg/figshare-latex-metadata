@@ -1,0 +1,15 @@
+# Ignore Python cache files.
+**/__pycache__/
+*.pyc
+
+# Ignore environment variables / secrets.
+.env
+
+# Ignore Python virtual environments.
+.venv/
+
+# Ignore LaTeX compilation artifacts.
+*.aux
+*.gz
+*.log
+*.out
